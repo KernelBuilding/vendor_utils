@@ -6,7 +6,7 @@
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#      http://www.apache.org/licenses/LICENSE-2.0
+#     http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
@@ -44,9 +44,6 @@ BOOTMODE=false;
 ps | grep zygote | grep -v grep >/dev/null && BOOTMODE=true;
 $BOOTMODE || ps -A 2>/dev/null | grep zygote | grep -v grep >/dev/null && BOOTMODE=true;
 
-# Const
-IS_AB=false
-
 show_progress 0.1000000, 0;
 ui_print "|---------------------------------------------|";
 ui_print "|---------------------------------------------|";
@@ -59,7 +56,7 @@ ui_print "|---------------------------------------------|";
 ui_print "|---------------PitchBlack Team---------------|";
 ui_print "|---------------------------------------------|";
 ui_print "|---------------------------------------------|";
-ui_print "|            Based on TWRP v3.7.1_x           |";
+ui_print "|           Based on TWRP v3.7.1_x            |";
 ui_print "|---------------------------------------------|";
 
 # /dev/tmp is safe for both booted and recovery installs
@@ -74,12 +71,15 @@ if [ ! -d $partdir ]; then
   abort "Failed unable to find the partition!";
 fi
 
-# target partition without the slot suffix
-if [ -e ${partdir}/recovery_b ] || [ "$IS_AB" == "false" ]; then
-  target=${partdir}/recovery;
+# Determine target partition
+if [ -e "${partdir}/vendor_boot_a" ] || [ -e "${partdir}/vendor_boot" ]; then
+  target=${partdir}/vendor_boot
+elif [ -e "${partdir}/recovery_b" ] || [ -e "${partdir}/boot_a" ]; then
+  target=${partdir}/boot
 else
-  target=${partdir}/boot;
-fi;
+  target=${partdir}/recovery
+fi
+
 name=$(basename $target);
 
 ui_print "|-----------Unpacking the installer-----------|";
@@ -96,48 +96,72 @@ tool=$tmp/magiskboot;
 chmod 755 $tool;
 
 ui_print "|---------------------------------------------|";
-ui_print "|- Target:$target -|";
-if [ "$IS_AB" == "false" ]; then
-  cp -f $recoveryimg new-boot.img;
-  blockdev --setrw $target;
-  cat new-boot.img /dev/zero > $target 2>/dev/null || true;
-  rm -f new-boot.img;
-else
-  for slot in _a _b; do
-    ui_print "|------------Doing Work on slot $slot------------|";
-    if [ "$recoverycpio" ]; then
-      dd bs=1048576 if=$target$slot of=boot.img || abort "Failed to dump image!";
-      $tool unpack -h boot.img || abort "Failed to unpack image!";
+ui_print "|- Target partition: $name -|";
 
-      # kernel string want_initramfs -> skip_initramfs (Magisk)
-      $tool hexpatch kernel 77616E745F696E697472616D6673 736B69705F696E697472616D6673;
-      # kernel string trip_initramfs -> skip_initramfs (SuperSU)
-      $tool hexpatch kernel 747269705F696E697472616D6673 736B69705F696E697472616D6673;
+# Logic based on target partition name
+case "$name" in
+  "recovery")
+    cp -f $recoveryimg new-image.img;
+    blockdev --setrw $target;
+    cat new-image.img /dev/zero > $target 2>/dev/null || true;
+    rm -f new-image.img;
+    ;;
 
-      # boot.img header cmdline remove skip_override (flar2 patch)
-      sed -i "s|$(grep '^cmdline=' header | cut -d= -f2-)|$(grep '^cmdline=' header | cut -d= -f2- | sed -e 's/skip_override//' -e 's/  */ /g' -e 's/[ \t]*$//')|" header;
+  "vendor_boot")
+    for slot in _a _b; do
+      if [ -e "$target$slot" ]; then
+        ui_print "|------------Doing Work on slot $slot------------|";
+        cp -f $recoveryimg new-image.img;
+        blockdev --setrw "$target$slot";
+        cat new-image.img /dev/zero > "$target$slot" 2>/dev/null || true;
+        rm -f new-image.img;
+      fi
+    done;
+    ;;
 
-      cp -f $recoverycpio ramdisk.cpio;
-      $tool repack boot.img || abort "Failed to repack image!";
-      $tool cleanup;
-    else
-      cp -f $recoveryimg new-boot.img;
-    fi;
+  "boot")
+    for slot in _a _b; do
+      if [ -e "$target$slot" ]; then
+        ui_print "|------------Doing Work on slot $slot------------|";
+        if [ "$recoverycpio" ]; then
+          dd bs=1048576 if=$target$slot of=boot.img || abort "Failed to dump image!";
+          $tool unpack -h boot.img || abort "Failed to unpack image!";
 
-    blockdev --setrw $target$slot;
-    cat new-boot.img /dev/zero > $target$slot 2>/dev/null || true;
-    rm -f new-boot.img;
-  done;
-fi
+          # kernel string want_initramfs -> skip_initramfs (Magisk)
+          $tool hexpatch kernel 77616E745F696E697472616D6673 736B69705F696E697472616D6673;
+          # kernel string trip_initramfs -> skip_initramfs (SuperSU)
+          $tool hexpatch kernel 747269705F696E697472616D6673 736B69705F696E697472616D6673;
+
+          # boot.img header cmdline remove skip_override (flar2 patch)
+          sed -i "s|$(grep '^cmdline=' header | cut -d= -f2-)|$(grep '^cmdline=' header | cut -d= -f2- | sed -e 's/skip_override//' -e 's/  */ /g' -e 's/[ \t]*$//')|" header;
+
+          cp -f $recoverycpio ramdisk.cpio;
+          $tool repack boot.img || abort "Failed to repack image!";
+          $tool cleanup;
+        else
+          cp -f $recoveryimg new-boot.img;
+        fi;
+
+        blockdev --setrw $target$slot;
+        cat new-boot.img /dev/zero > $target$slot 2>/dev/null || true;
+        rm -f new-boot.img;
+      fi
+    done;
+    ;;
+
+  *)
+    abort "Error: Unknown target partition '$name'!";
+    ;;
+esac
 
 #Copy Specific Files
 ui_print "|---------------------------------------------|";
 ui_print "|------------Unpacking The Tools--------------|";
-if [ -f "/sdcard/PBRP" ]; then
-cp -r $tmp/PBRP/tools /sdcard/PBRP/
+if [ -d "/sdcard/PBRP" ]; then
+  cp -r $tmp/PBRP/tools /sdcard/PBRP/
 else
-mkdir -p /sdcard/PBRP
-cp -r $tmp/PBRP/tools /sdcard/PBRP/
+  mkdir -p /sdcard/PBRP
+  cp -r $tmp/PBRP/tools /sdcard/PBRP/
 fi
 ui_print "|--------Finished Unpacking The Tools---------|";
 
@@ -156,4 +180,3 @@ ui_print "|------------Installation finished!-----------|";
 
 cd /;
 rm -rf /dev/tmp;
-
